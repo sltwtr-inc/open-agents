@@ -6,7 +6,7 @@ import {
   groupByProvider,
   withMissingModelOption,
 } from "./model-options";
-import type { AvailableModel } from "./models";
+import { APP_DEFAULT_MODEL_ID, type AvailableModel } from "./models";
 
 function createModel(input: {
   id: string;
@@ -173,9 +173,9 @@ describe("model options", () => {
   test("getDefaultModelOptionId prefers repository default model when present", () => {
     const options = [
       {
-        id: "openai/gpt-5.4",
-        label: "GPT-5.4",
-        shortLabel: "GPT-5.4",
+        id: APP_DEFAULT_MODEL_ID,
+        label: "App Default",
+        shortLabel: "App Default",
         isVariant: false,
         provider: "anthropic",
       },
@@ -188,7 +188,7 @@ describe("model options", () => {
       },
     ];
 
-    expect(getDefaultModelOptionId(options)).toBe("openai/gpt-5.4");
+    expect(getDefaultModelOptionId(options)).toBe(APP_DEFAULT_MODEL_ID);
   });
 
   test("getDefaultModelOptionId falls back to first option when default is missing", () => {
