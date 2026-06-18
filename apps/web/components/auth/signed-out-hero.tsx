@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { SignInButton } from "@/components/auth/sign-in-button";
+import { SignInErrorBanner } from "@/components/auth/sign-in-error-banner";
 import { AppMockup } from "@/components/landing/app-mockup";
 import { GitHubLink } from "@/components/landing/github-link";
 import { LandingBento } from "@/components/landing/bento";
@@ -53,6 +54,8 @@ export function SignedOutHero() {
               <SignInButton size="lg" callbackUrl="/sessions" />
               <GitHubLink>Open Source</GitHubLink>
             </div>
+
+            <SignInErrorBanner />
           </div>
 
           <div className="mx-auto mt-12 max-w-[1320px] px-4 sm:px-6 md:mt-20 md:px-0 overflow-hidden">

@@ -1,10 +1,17 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError } from "better-auth/api";
 import type {
   GithubProfile,
   VercelProfile,
 } from "better-auth/social-providers";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { isSeededAdminEmail } from "@/lib/auth/admin-emails";
+import {
+  isAllowedSignInEmail,
+  SIGNIN_EMAIL_DOMAIN_ERROR,
+} from "@/lib/auth/allowed-email-domain";
 import { deriveAuthUsername } from "@/lib/auth/username";
 import { db } from "@/lib/db/client";
 import * as schema from "@/lib/db/schema";
@@ -120,17 +127,68 @@ export const auth = betterAuth({
     additionalFields: {
       username: { type: "string", required: true },
       lastLoginAt: { type: "date", required: false },
+      // Server-controlled; never settable via client input. Seeded from
+      // ADMIN_EMAILS in the user/session create hooks above.
+      isAdmin: {
+        type: "boolean",
+        required: false,
+        input: false,
+        defaultValue: false,
+      },
     },
   },
 
   databaseHooks: {
     user: {
       create: {
-        before: async (user) => ({
-          data: {
-            username: deriveAuthUsername(user),
-          },
-        }),
+        before: async (user) => {
+          // Restrict account creation to the allowed sign-in domain. The
+          // primary (Vercel) profile email is what reaches this hook; GitHub
+          // account linking does not create a new user, so its (possibly
+          // different) email is never checked here.
+          if (!isAllowedSignInEmail(user.email)) {
+            throw new APIError("FORBIDDEN", {
+              message: SIGNIN_EMAIL_DOMAIN_ERROR,
+            });
+          }
+
+          return {
+            data: {
+              username: deriveAuthUsername(user),
+              isAdmin: isSeededAdminEmail(user.email),
+            },
+          };
+        },
+      },
+    },
+    session: {
+      create: {
+        before: async (session) => {
+          // Durable guard: re-validate on every sign-in (blocks any
+          // previously-seeded user whose access was later revoked) and keep
+          // admin status in sync with the ADMIN_EMAILS allowlist.
+          const [userRow] = await db
+            .select({
+              email: schema.users.email,
+              isAdmin: schema.users.isAdmin,
+            })
+            .from(schema.users)
+            .where(eq(schema.users.id, session.userId))
+            .limit(1);
+
+          if (!isAllowedSignInEmail(userRow?.email)) {
+            throw new APIError("FORBIDDEN", {
+              message: SIGNIN_EMAIL_DOMAIN_ERROR,
+            });
+          }
+
+          if (isSeededAdminEmail(userRow.email) && !userRow.isAdmin) {
+            await db
+              .update(schema.users)
+              .set({ isAdmin: true, updatedAt: new Date() })
+              .where(eq(schema.users.id, session.userId));
+          }
+        },
       },
     },
   },
