@@ -8,6 +8,11 @@ import {
   updateInstallationsByInstallationId,
   upsertInstallation,
 } from "@/lib/db/installations";
+import {
+  deleteOrgInstallation,
+  getOrgInstallation,
+  upsertOrgInstallation,
+} from "@/lib/db/org-github";
 import { updateSession } from "@/lib/db/sessions";
 import { db } from "@/lib/db/client";
 import { sessions } from "@/lib/db/schema";
@@ -211,7 +216,28 @@ export async function POST(req: Request): Promise<Response> {
 
   if (event === "installation" && parsed.data.action === "deleted") {
     const deleted = await deleteInstallationByInstallationId(installationId);
-    return Response.json({ ok: true, deleted });
+    const orgDeleted = await deleteOrgInstallation(installationId);
+    return Response.json({ ok: true, deleted, orgDeleted });
+  }
+
+  // Keep the org-wide installation singleton in sync, but only refresh the
+  // already-configured installation — creation is done authoritatively by an
+  // admin via the install callback, so a stray install can't hijack it.
+  const orgInstallation = await getOrgInstallation();
+  if (
+    account &&
+    orgInstallation &&
+    orgInstallation.installationId === installationId
+  ) {
+    await upsertOrgInstallation({
+      installationId,
+      accountLogin: account.login,
+      accountType: normalizeAccountType(account.type),
+      repositorySelection:
+        repositorySelection ?? orgInstallation.repositorySelection,
+      installationUrl: installationUrl ?? orgInstallation.installationUrl,
+      configuredByUserId: orgInstallation.configuredByUserId,
+    });
   }
 
   const existing = await getInstallationsByInstallationId(installationId);

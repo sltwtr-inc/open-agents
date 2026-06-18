@@ -1,12 +1,9 @@
-import { getInstallationByAccountLogin } from "@/lib/db/installations";
+import { getAllowedRepo, getOrgInstallation } from "@/lib/db/org-github";
 import { withScopedInstallationOctokit } from "./app";
-import { getUserOctokit } from "./client";
 
 export type RepoAccessDeniedReason =
-  | "no_user_token"
-  | "user_no_access"
-  | "user_no_write"
-  | "no_installation"
+  | "not_allowlisted"
+  | "no_org_installation"
   | "app_no_access";
 
 export type RequiredRepoUserPermission = "read" | "write";
@@ -19,20 +16,6 @@ export type RepoAccessResult =
       defaultBranch: string;
     }
   | { ok: false; reason: RepoAccessDeniedReason };
-
-function hasUserWritePermission(
-  permissions:
-    | {
-        admin: boolean;
-        maintain?: boolean;
-        push: boolean;
-      }
-    | undefined,
-): boolean {
-  return Boolean(
-    permissions?.admin || permissions?.maintain || permissions?.push,
-  );
-}
 
 function getGitHubHttpStatus(error: unknown): number | null {
   if (!error || typeof error !== "object") {
@@ -57,56 +40,43 @@ function getGitHubHttpStatus(error: unknown): number | null {
 }
 
 /**
- * Verify that the user can access a repo AND the GitHub App installation
- * covers it. Returns the installationId on success.
+ * Verify access to a repository under the single-org, admin-managed model.
  *
- * This enforces the intersection: user permissions ∩ installation scope.
+ * Access is governed by org membership, not per-user GitHub permissions: any
+ * authenticated team member may use a repository that (1) an admin has added to
+ * the allowlist and (2) the org-wide GitHub App installation can reach. The
+ * `userId` and `requiredUserPermission` params are accepted for backwards
+ * compatibility with existing callers but are intentionally ignored — write
+ * capability is governed by the permissions minted on the scoped token.
+ *
+ * The success shape ({ installationId, repositoryId, defaultBranch }) is
+ * preserved so all existing callers (clone, commit, PR) keep working.
  */
 export async function verifyRepoAccess(params: {
-  userId: string;
+  userId?: string;
   owner: string;
   repo: string;
   requiredUserPermission?: RequiredRepoUserPermission;
 }): Promise<RepoAccessResult> {
-  const { userId, owner, repo, requiredUserPermission = "read" } = params;
+  const { owner, repo } = params;
 
-  // 1. check user can see the repo
-  const userOctokit = await getUserOctokit(userId);
-  if (!userOctokit) {
-    return { ok: false, reason: "no_user_token" };
+  // 1. repo must be on the admin-curated allowlist
+  const allowed = await getAllowedRepo(owner, repo);
+  if (!allowed) {
+    return { ok: false, reason: "not_allowlisted" };
   }
 
-  let repositoryId: number;
-  let defaultBranch: string;
-  try {
-    const userRepoResponse = await userOctokit.rest.repos.get({ owner, repo });
-    repositoryId = userRepoResponse.data.id;
-    defaultBranch = userRepoResponse.data.default_branch;
-    if (
-      requiredUserPermission === "write" &&
-      !hasUserWritePermission(userRepoResponse.data.permissions)
-    ) {
-      return { ok: false, reason: "user_no_write" };
-    }
-  } catch (error: unknown) {
-    const status = getGitHubHttpStatus(error);
-    if (status === 404 || status === 403) {
-      return { ok: false, reason: "user_no_access" };
-    }
-    throw error;
-  }
-
-  // 2. check installation exists for this owner
-  const installation = await getInstallationByAccountLogin(userId, owner);
+  // 2. the org-wide installation must exist
+  const installation = await getOrgInstallation();
   if (!installation) {
-    return { ok: false, reason: "no_installation" };
+    return { ok: false, reason: "no_org_installation" };
   }
 
-  // 3. check installation covers this specific repo
+  // 3. the installation must still cover this specific repo
   try {
     await withScopedInstallationOctokit({
       installationId: installation.installationId,
-      repositoryId,
+      repositoryId: allowed.repositoryId,
       permissions: { contents: "read" },
       operation: async (installationOctokit) => {
         await installationOctokit.rest.repos.get({ owner, repo });
@@ -129,8 +99,8 @@ export async function verifyRepoAccess(params: {
   return {
     ok: true,
     installationId: installation.installationId,
-    repositoryId,
-    defaultBranch,
+    repositoryId: allowed.repositoryId,
+    defaultBranch: allowed.defaultBranch ?? "main",
   };
 }
 
@@ -141,15 +111,11 @@ export function getRepoAccessErrorMessage(
   reason: RepoAccessDeniedReason,
 ): string {
   switch (reason) {
-    case "no_user_token":
-      return "Connect GitHub to access repositories";
-    case "user_no_access":
-      return "You don't have access to this repository";
-    case "user_no_write":
-      return "You need write access to this repository to perform this action";
-    case "no_installation":
-      return "GitHub App not installed for this organization. Install it from Settings > Connections.";
+    case "not_allowlisted":
+      return "This repository is not enabled for SLTWTR sessions. Ask an admin to add it in Settings → Admin.";
+    case "no_org_installation":
+      return "The SLTWTR GitHub App is not configured yet. Ask an admin to connect it in Settings → Admin.";
     case "app_no_access":
-      return "GitHub App doesn't have access to this repository. Ask an org admin to update the app's repository permissions.";
+      return "The SLTWTR GitHub App can't access this repository. Ask an admin to update the app's repository permissions.";
   }
 }

@@ -18,4 +18,9 @@ export interface SessionUserInfo {
   hasGitHub?: boolean;
   hasGitHubAccount?: boolean;
   hasGitHubInstallations?: boolean;
+  /**
+   * Whether the org-wide GitHub App is configured. Under the single-org model
+   * this — not per-user installs — governs whether repo-backed sessions work.
+   */
+  orgGitHubReady?: boolean;
 }

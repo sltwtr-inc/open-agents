@@ -1,4 +1,5 @@
 import type { SandboxState } from "@open-agents/sandbox";
+import { sql } from "drizzle-orm";
 import type { ModelVariant } from "@/lib/model-variants";
 import type { GlobalSkillRef } from "@/lib/skills/global-skill-refs";
 import {
@@ -97,6 +98,50 @@ export const githubInstallations = pgTable(
     uniqueIndex("github_installations_user_account_idx").on(
       table.userId,
       table.accountLogin,
+    ),
+  ],
+);
+
+// Single org-wide GitHub App installation (admin-managed). At most one row:
+// the SLTWTR org install that every team member's sessions clone through.
+export const orgGithubInstallation = pgTable("org_github_installation", {
+  id: text("id").primaryKey(),
+  installationId: integer("installation_id").notNull().unique(),
+  accountLogin: text("account_login").notNull(),
+  accountType: text("account_type", {
+    enum: ["User", "Organization"],
+  }).notNull(),
+  repositorySelection: text("repository_selection", {
+    enum: ["all", "selected"],
+  }).notNull(),
+  installationUrl: text("installation_url"),
+  configuredByUserId: text("configured_by_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Admin-curated allowlist of repositories team members may launch sessions on.
+export const orgAllowedRepos = pgTable(
+  "org_allowed_repos",
+  {
+    id: text("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    repositoryId: integer("repository_id").notNull(),
+    defaultBranch: text("default_branch"),
+    cloneUrl: text("clone_url").notNull(),
+    addedByUserId: text("added_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("org_allowed_repos_owner_repo_idx").on(
+      sql`lower(${table.owner})`,
+      sql`lower(${table.repo})`,
     ),
   ],
 );
@@ -333,6 +378,11 @@ export type WorkflowRunStep = typeof workflowRunSteps.$inferSelect;
 export type NewWorkflowRunStep = typeof workflowRunSteps.$inferInsert;
 export type GitHubInstallation = typeof githubInstallations.$inferSelect;
 export type NewGitHubInstallation = typeof githubInstallations.$inferInsert;
+export type OrgGithubInstallation = typeof orgGithubInstallation.$inferSelect;
+export type NewOrgGithubInstallation =
+  typeof orgGithubInstallation.$inferInsert;
+export type OrgAllowedRepo = typeof orgAllowedRepos.$inferSelect;
+export type NewOrgAllowedRepo = typeof orgAllowedRepos.$inferInsert;
 
 // User preferences for settings
 export const userPreferences = pgTable("user_preferences", {

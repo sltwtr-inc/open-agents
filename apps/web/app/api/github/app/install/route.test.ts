@@ -5,8 +5,7 @@ let authSession: {
   authProvider: "vercel";
   user: { id: string; email?: string };
 } | null;
-let hasLinkedGitHub = false;
-let installations: Array<{ installationId: number }> = [];
+let isAdmin = false;
 
 mock.module("server-only", () => ({}));
 
@@ -18,22 +17,8 @@ mock.module("@/lib/session/get-server-session", () => ({
   getServerSession: async () => authSession,
 }));
 
-mock.module("@/lib/github/token", () => ({
-  getUserGitHubToken: async () => (hasLinkedGitHub ? "ghu_test" : null),
-}));
-
-mock.module("@/lib/github/users", () => ({
-  hasGitHubAccount: async () => hasLinkedGitHub,
-  getGitHubUsername: async () => (hasLinkedGitHub ? "testuser" : null),
-  getGitHubAccountId: async () => (hasLinkedGitHub ? "12345" : null),
-}));
-
-mock.module("@/lib/db/installations", () => ({
-  getInstallationsByUserId: async () => installations,
-}));
-
-mock.module("@/lib/github/sync", () => ({
-  syncUserInstallations: async () => installations.length,
+mock.module("@/lib/db/users", () => ({
+  isUserAdmin: async () => isAdmin,
 }));
 
 const routeModulePromise = import("./route");
@@ -55,14 +40,13 @@ function createRequest(url: string): NextRequest {
   } as unknown as NextRequest;
 }
 
-describe("GET /api/github/app/install", () => {
+describe("GET /api/github/app/install (admin org install)", () => {
   beforeEach(() => {
     authSession = {
       authProvider: "vercel",
-      user: { id: "user-1", email: "person@vercel.com" },
+      user: { id: "user-1", email: "matt@sltwtr.com" },
     };
-    hasLinkedGitHub = true;
-    installations = [{ installationId: 1 }];
+    isAdmin = true;
 
     Object.assign(process.env, {
       NEXT_PUBLIC_GITHUB_APP_SLUG: "open-agents",
@@ -77,59 +61,48 @@ describe("GET /api/github/app/install", () => {
     });
   });
 
-  test("redirects to get-started and preserves next when github not linked", async () => {
-    hasLinkedGitHub = false;
-    installations = [];
+  test("redirects unauthenticated users home", async () => {
+    authSession = null;
+    const { GET } = await routeModulePromise;
+
+    const response = await GET(
+      createRequest("http://localhost/api/github/app/install"),
+    );
+
+    expect(response.status).toBe(307);
+    const redirectUrl = new URL(response.headers.get("location") as string);
+    expect(redirectUrl.pathname).toBe("/");
+  });
+
+  test("forbids non-admin users", async () => {
+    isAdmin = false;
     const { GET } = await routeModulePromise;
 
     const response = await GET(
       createRequest(
-        "http://localhost/api/github/app/install?next=/settings/connections",
+        "http://localhost/api/github/app/install?next=/settings/admin",
       ),
     );
 
     expect(response.status).toBe(307);
-    const location = response.headers.get("location");
-    expect(location).toBeTruthy();
-    const redirectUrl = new URL(location as string);
-    expect(redirectUrl.pathname).toBe("/get-started");
-    expect(redirectUrl.searchParams.get("next")).toBe("/settings/connections");
+    const redirectUrl = new URL(response.headers.get("location") as string);
+    expect(redirectUrl.pathname).toBe("/settings/admin");
+    expect(redirectUrl.searchParams.get("github")).toBe("forbidden");
   });
 
-  test("redirects to github install when linked but no installations", async () => {
-    installations = [];
+  test("redirects admins to the GitHub App install page", async () => {
     const { GET } = await routeModulePromise;
 
     const response = await GET(
-      createRequest("http://localhost/api/github/app/install?next=/sessions"),
+      createRequest(
+        "http://localhost/api/github/app/install?next=/settings/admin",
+      ),
     );
 
     expect(response.status).toBe(307);
-    const location = response.headers.get("location");
-    expect(location).toBeTruthy();
-    const redirectUrl = new URL(location as string);
+    const redirectUrl = new URL(response.headers.get("location") as string);
     expect(redirectUrl.origin).toBe("https://github.com");
     expect(redirectUrl.pathname).toContain("open-agents");
-  });
-
-  test("blocks managed template trial users", async () => {
-    authSession = {
-      authProvider: "vercel",
-      user: { id: "user-1", email: "person@example.com" },
-    };
-    const { GET } = await routeModulePromise;
-
-    const response = await GET(
-      createRequest(
-        "https://open-agents.dev/api/github/app/install?next=/settings/connections",
-      ),
-    );
-
-    expect(response.status).toBe(307);
-    const location = response.headers.get("location");
-    expect(location).toBeTruthy();
-    const redirectUrl = new URL(location as string);
-    expect(redirectUrl.pathname).toBe("/settings/connections");
-    expect(redirectUrl.searchParams.get("github")).toBe("trial_blocked");
+    expect(redirectUrl.searchParams.get("state")).toBe("state-123");
   });
 });

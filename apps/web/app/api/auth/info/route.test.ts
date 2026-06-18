@@ -16,6 +16,7 @@ let exists = true;
 let hasGitHubLinked = false;
 let installations: Array<{ installationId: number }> = [];
 let isAdmin = false;
+let orgInstallation: { installationId: number } | undefined;
 
 const originalNodeEnv = process.env.NODE_ENV;
 
@@ -39,6 +40,10 @@ mock.module("@/lib/github/users", () => ({
 
 mock.module("@/lib/db/installations", () => ({
   getInstallationsByUserId: async () => installations,
+}));
+
+mock.module("@/lib/db/org-github", () => ({
+  getOrgInstallation: async () => orgInstallation,
 }));
 
 const routeModulePromise = import("./route");
@@ -69,6 +74,7 @@ describe("GET /api/auth/info", () => {
     hasGitHubLinked = false;
     installations = [];
     isAdmin = false;
+    orgInstallation = undefined;
   });
 
   test("returns unauthenticated when there is no session", async () => {
@@ -107,7 +113,18 @@ describe("GET /api/auth/info", () => {
       hasGitHub: true,
       hasGitHubAccount: true,
       hasGitHubInstallations: true,
+      orgGitHubReady: false,
     });
+  });
+
+  test("reports org GitHub readiness when the org app is installed", async () => {
+    orgInstallation = { installationId: 99 };
+    const { GET } = await routeModulePromise;
+
+    const response = await GET(createRequest());
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).orgGitHubReady).toBe(true);
   });
 
   test("reports missing GitHub connection state", async () => {
@@ -124,6 +141,7 @@ describe("GET /api/auth/info", () => {
       hasGitHub: false,
       hasGitHubAccount: false,
       hasGitHubInstallations: false,
+      orgGitHubReady: false,
     });
   });
 
@@ -143,6 +161,7 @@ describe("GET /api/auth/info", () => {
       hasGitHub: false,
       hasGitHubAccount: false,
       hasGitHubInstallations: false,
+      orgGitHubReady: false,
     });
   });
 
@@ -161,6 +180,7 @@ describe("GET /api/auth/info", () => {
       hasGitHub: false,
       hasGitHubAccount: false,
       hasGitHubInstallations: false,
+      orgGitHubReady: false,
     });
   });
 });
