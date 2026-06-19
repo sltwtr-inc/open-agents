@@ -1,9 +1,8 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { syncUserInstallations } from "@/lib/github/sync";
-import { getUserGitHubToken } from "@/lib/github/token";
-import { getGitHubUsername } from "@/lib/github/users";
-import { isManagedTemplateTrialUser } from "@/lib/managed-template-trial";
+import { isUserAdmin } from "@/lib/db/users";
+import { upsertOrgInstallation } from "@/lib/db/org-github";
+import { getInstallationDetails } from "@/lib/github/app";
 import { sanitizeInternalRedirect } from "@/lib/redirect-safety";
 import { getServerSession } from "@/lib/session/get-server-session";
 
@@ -29,14 +28,15 @@ function redirectAndClearCookies(url: string | URL): NextResponse {
 }
 
 /**
- * GitHub App Setup URL callback — handles installation sync only.
- * OAuth token exchange is handled by better-auth at /api/auth/callback/github.
+ * GitHub App Setup URL callback. Under the single-org model this records the
+ * org-wide installation (admin-only). OAuth token exchange is still handled by
+ * better-auth at /api/auth/callback/github.
  */
 export async function GET(req: Request): Promise<Response> {
   const cookieStore = await cookies();
   const redirectTo = sanitizeInternalRedirect(
     cookieStore.get("github_app_install_redirect_to")?.value,
-    "/get-started",
+    "/settings/admin",
     req.url,
   );
 
@@ -47,8 +47,10 @@ export async function GET(req: Request): Promise<Response> {
 
   const redirectUrl = new URL(redirectTo, req.url);
 
-  if (isManagedTemplateTrialUser(session, req.url)) {
-    redirectUrl.searchParams.set("github", "trial_blocked");
+  // Only admins configure the org-wide installation.
+  const admin = await isUserAdmin(session.user.id);
+  if (!admin) {
+    redirectUrl.searchParams.set("github", "forbidden");
     return redirectAndClearCookies(redirectUrl);
   }
 
@@ -58,41 +60,38 @@ export async function GET(req: Request): Promise<Response> {
   );
   const setupAction = requestUrl.searchParams.get("setup_action");
 
-  // get the user's github token from better-auth
-  const token = await getUserGitHubToken(session.user.id);
-  if (!token) {
-    redirectUrl.searchParams.set("github", "not_linked");
+  if (setupAction === "request") {
+    redirectUrl.searchParams.set("github", "request_sent");
     return redirectAndClearCookies(redirectUrl);
   }
 
-  // sync installations
-  let syncedInstallationsCount: number | null = null;
-  const username = await getGitHubUsername(session.user.id);
-
-  if (username) {
-    try {
-      syncedInstallationsCount = await syncUserInstallations(
-        session.user.id,
-        token,
-        username,
-      );
-    } catch (error) {
-      console.error("Failed syncing installations:", error);
-    }
-  }
-
-  let githubStatus: string;
-  if (setupAction === "request") {
-    githubStatus = "request_sent";
-  } else if ((syncedInstallationsCount ?? 0) > 0) {
-    githubStatus = "app_installed";
-  } else if (!installationId) {
-    githubStatus = "no_action";
+  if (!installationId) {
+    redirectUrl.searchParams.set("github", "no_action");
     redirectUrl.searchParams.set("missing_installation_id", "1");
-  } else {
-    githubStatus = "pending_sync";
+    return redirectAndClearCookies(redirectUrl);
   }
 
-  redirectUrl.searchParams.set("github", githubStatus);
+  try {
+    const details = await getInstallationDetails(installationId);
+    if (!details) {
+      redirectUrl.searchParams.set("github", "pending_sync");
+      return redirectAndClearCookies(redirectUrl);
+    }
+
+    await upsertOrgInstallation({
+      installationId: details.installationId,
+      accountLogin: details.accountLogin,
+      accountType: details.accountType,
+      repositorySelection: details.repositorySelection,
+      installationUrl: details.installationUrl,
+      configuredByUserId: session.user.id,
+    });
+
+    redirectUrl.searchParams.set("github", "app_installed");
+  } catch (error) {
+    console.error("Failed to record org GitHub installation:", error);
+    redirectUrl.searchParams.set("github", "pending_sync");
+  }
+
   return redirectAndClearCookies(redirectUrl);
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mintFullInstallationToken, revokeInstallationToken } from "./app";
 
 // ---- installation repos listing ----
 
@@ -152,6 +153,153 @@ export async function listUserInstallationRepositories({
     updated_at: repo.updated_at,
     language: repo.language,
   }));
+}
+
+interface ListInstallationRepositoriesWithAppTokenOptions {
+  installationId: number;
+  query?: string;
+  limit?: number;
+}
+
+/**
+ * List every repository the org-wide installation can access, using an
+ * app-minted installation token (not a user token). For admin repo curation
+ * only. The short-lived token is revoked before returning.
+ */
+export async function listInstallationRepositoriesWithAppToken({
+  installationId,
+  query,
+  limit,
+}: ListInstallationRepositoriesWithAppTokenOptions): Promise<
+  InstallationRepository[]
+> {
+  const queryFilter = query?.trim().toLowerCase();
+  const normalizedLimit = normalizeLimit(limit);
+  const perPage = 50;
+  const matchedRepos: z.infer<typeof installationRepoSchema>[] = [];
+
+  const token = await mintFullInstallationToken(installationId);
+  try {
+    for (let page = 1; page <= INSTALLATION_REPOS_MAX_PAGES; page++) {
+      const endpoint = new URL(
+        "https://api.github.com/installation/repositories",
+      );
+      endpoint.searchParams.set("per_page", `${perPage}`);
+      endpoint.searchParams.set("page", `${page}`);
+
+      const response = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(
+          `Failed to fetch installation repositories: ${response.status} ${body}`,
+        );
+      }
+
+      const json = await response.json();
+      const parsed = installationReposResponseSchema.safeParse(json);
+      if (!parsed.success) {
+        throw new Error("Invalid GitHub installation repositories response");
+      }
+
+      if (parsed.data.repositories.length === 0) {
+        break;
+      }
+
+      const pageMatches = parsed.data.repositories.filter((repo) =>
+        queryFilter ? repo.name.toLowerCase().includes(queryFilter) : true,
+      );
+      matchedRepos.push(...pageMatches);
+
+      if (matchedRepos.length >= normalizedLimit) {
+        break;
+      }
+      if (parsed.data.repositories.length < perPage) {
+        break;
+      }
+    }
+  } finally {
+    await revokeInstallationToken(token);
+  }
+
+  matchedRepos.sort(compareRepositoriesByRecentActivity);
+  return matchedRepos.slice(0, normalizedLimit).map((repo) => ({
+    name: repo.name,
+    full_name: repo.full_name,
+    description: repo.description,
+    private: repo.private,
+    clone_url: repo.clone_url,
+    updated_at: repo.updated_at,
+    language: repo.language,
+  }));
+}
+
+const repoLookupSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  default_branch: z.string(),
+  clone_url: z.string().url(),
+  private: z.boolean(),
+  owner: z.object({ login: z.string() }),
+});
+
+export interface InstallationRepoLookup {
+  repositoryId: number;
+  owner: string;
+  name: string;
+  defaultBranch: string;
+  cloneUrl: string;
+  private: boolean;
+}
+
+/**
+ * Fetch a single repo's metadata via the org installation token. Used when an
+ * admin adds a repo to the allowlist. Returns null if the installation can't
+ * see the repo.
+ */
+export async function getRepoViaAppInstallation({
+  installationId,
+  owner,
+  repo,
+}: {
+  installationId: number;
+  owner: string;
+  repo: string;
+}): Promise<InstallationRepoLookup | null> {
+  const token = await mintFullInstallationToken(installationId);
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github.v3+json",
+        },
+      },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const parsed = repoLookupSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return null;
+    }
+    return {
+      repositoryId: parsed.data.id,
+      owner: parsed.data.owner.login,
+      name: parsed.data.name,
+      defaultBranch: parsed.data.default_branch,
+      cloneUrl: parsed.data.clone_url,
+      private: parsed.data.private,
+    };
+  } finally {
+    await revokeInstallationToken(token);
+  }
 }
 
 // ---- branches ----

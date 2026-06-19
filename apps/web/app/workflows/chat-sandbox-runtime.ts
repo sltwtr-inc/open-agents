@@ -9,6 +9,7 @@ import {
   kickSandboxProvisioningWorkflow,
   waitForSandboxProvisioningRun,
 } from "@/lib/sandbox/provisioning-kick";
+import { resolveSandboxSecrets } from "@/lib/sandbox/sandbox-secrets";
 import { isSandboxActive } from "@/lib/sandbox/utils";
 import { getSandboxSkillDirectories } from "@/lib/skills/directories";
 import { getCachedSkills, setCachedSkills } from "@/lib/skills-cache";
@@ -26,6 +27,8 @@ export type ResolvedChatSandboxRuntime = {
   sessionTitle: string;
   repoOwner?: string;
   repoName?: string;
+  /** Org/repo secrets to expose to the agent's sandbox commands, if opted in. */
+  env?: Record<string, string>;
 };
 
 async function loadSessionSkills(params: {
@@ -107,6 +110,14 @@ export async function resolveChatSandboxRuntime(params: {
     sandbox,
   });
 
+  const env = await resolveSandboxSecrets({
+    owner: session.repoOwner,
+    repo: session.repoName,
+    sessionId: params.sessionId,
+    actorUserId: params.userId,
+    audit: true,
+  });
+
   return {
     sandboxState,
     workingDirectory: sandbox.workingDirectory,
@@ -117,5 +128,6 @@ export async function resolveChatSandboxRuntime(params: {
     sessionTitle: session.title,
     repoOwner: session.repoOwner ?? undefined,
     repoName: session.repoName ?? undefined,
+    env,
   };
 }

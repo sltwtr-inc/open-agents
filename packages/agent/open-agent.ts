@@ -36,6 +36,8 @@ export interface AgentSandboxContext {
   workingDirectory: string;
   currentBranch?: string;
   environmentDetails?: string;
+  /** Env vars (e.g. org/repo secrets) made available to every sandbox command. */
+  env?: Record<string, string>;
 }
 
 const callOptionsSchema = z.object({

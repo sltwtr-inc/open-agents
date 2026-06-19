@@ -2,10 +2,15 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 let authSession: { user: { id: string } } | null;
 let cookieValues: Record<string, string>;
-let githubToken: string | null;
-let githubUsername: string | null;
-let syncedInstallationsCount = 0;
-let syncInstallationsError: Error | null;
+let isAdmin = true;
+let installationDetails: {
+  installationId: number;
+  accountLogin: string;
+  accountType: "User" | "Organization";
+  repositorySelection: "all" | "selected";
+  installationUrl: string | null;
+} | null;
+let upsertedInstallationId: number | null = null;
 
 mock.module("next/headers", () => ({
   cookies: async () => ({
@@ -20,22 +25,18 @@ mock.module("@/lib/session/get-server-session", () => ({
   getServerSession: async () => authSession,
 }));
 
-mock.module("@/lib/github/token", () => ({
-  getUserGitHubToken: async () => githubToken,
+mock.module("@/lib/db/users", () => ({
+  isUserAdmin: async () => isAdmin,
 }));
 
-mock.module("@/lib/github/users", () => ({
-  getGitHubUsername: async () => githubUsername,
-  getGitHubAccountId: async () => null,
+mock.module("@/lib/github/app", () => ({
+  getInstallationDetails: async () => installationDetails,
 }));
 
-mock.module("@/lib/github/sync", () => ({
-  syncUserInstallations: async () => {
-    if (syncInstallationsError) {
-      throw syncInstallationsError;
-    }
-
-    return syncedInstallationsCount;
+mock.module("@/lib/db/org-github", () => ({
+  upsertOrgInstallation: async (input: { installationId: number }) => {
+    upsertedInstallationId = input.installationId;
+    return input;
   },
 }));
 
@@ -47,35 +48,53 @@ function getRedirectUrl(response: Response): URL {
   return new URL(location as string);
 }
 
-describe("GET /api/github/app/callback", () => {
+describe("GET /api/github/app/callback (admin org install)", () => {
   beforeEach(() => {
     authSession = { user: { id: "user-1" } };
     cookieValues = {
-      github_app_install_redirect_to: "/settings/connections",
+      github_app_install_redirect_to: "/settings/admin",
     };
-    githubToken = "ghu_test";
-    githubUsername = "octocat";
-    syncedInstallationsCount = 1;
-    syncInstallationsError = null;
+    isAdmin = true;
+    installationDetails = {
+      installationId: 123,
+      accountLogin: "sltwtr",
+      accountType: "Organization",
+      repositorySelection: "selected",
+      installationUrl: "https://github.com/orgs/sltwtr",
+    };
+    upsertedInstallationId = null;
   });
 
-  test("returns no_action when the user exits before selecting an installation", async () => {
-    syncedInstallationsCount = 0;
+  test("forbids non-admins", async () => {
+    isAdmin = false;
+    const { GET } = await routeModulePromise;
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/github/app/callback?installation_id=123",
+      ),
+    );
+
+    const redirectUrl = getRedirectUrl(response);
+    expect(redirectUrl.searchParams.get("github")).toBe("forbidden");
+    expect(upsertedInstallationId).toBeNull();
+  });
+
+  test("returns no_action when no installation_id is present", async () => {
     const { GET } = await routeModulePromise;
 
     const response = await GET(
       new Request("http://localhost/api/github/app/callback"),
     );
 
-    expect(response.status).toBe(307);
     const redirectUrl = getRedirectUrl(response);
-    expect(redirectUrl.pathname).toBe("/settings/connections");
+    expect(redirectUrl.pathname).toBe("/settings/admin");
     expect(redirectUrl.searchParams.get("github")).toBe("no_action");
     expect(redirectUrl.searchParams.get("missing_installation_id")).toBe("1");
   });
 
-  test("returns pending_sync when github reports an installation but sync is still empty", async () => {
-    syncedInstallationsCount = 0;
+  test("returns pending_sync when installation details can't be fetched", async () => {
+    installationDetails = null;
     const { GET } = await routeModulePromise;
 
     const response = await GET(
@@ -84,14 +103,12 @@ describe("GET /api/github/app/callback", () => {
       ),
     );
 
-    expect(response.status).toBe(307);
     const redirectUrl = getRedirectUrl(response);
     expect(redirectUrl.searchParams.get("github")).toBe("pending_sync");
-    expect(redirectUrl.searchParams.get("missing_installation_id")).toBeNull();
+    expect(upsertedInstallationId).toBeNull();
   });
 
-  test("returns app_installed only after at least one installation syncs", async () => {
-    syncedInstallationsCount = 1;
+  test("records the org installation and returns app_installed", async () => {
     const { GET } = await routeModulePromise;
 
     const response = await GET(
@@ -100,9 +117,8 @@ describe("GET /api/github/app/callback", () => {
       ),
     );
 
-    expect(response.status).toBe(307);
     const redirectUrl = getRedirectUrl(response);
     expect(redirectUrl.searchParams.get("github")).toBe("app_installed");
-    expect(redirectUrl.searchParams.get("missing_installation_id")).toBeNull();
+    expect(upsertedInstallationId).toBe(123);
   });
 });

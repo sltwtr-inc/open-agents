@@ -71,7 +71,28 @@ describe("tools/utils", () => {
 
     expect(sandbox.workingDirectory).toBe("/repo");
     expect(connectSandboxCalls).toEqual([
-      [{ type: "vercel", sandboxId: "sbx-456" }],
+      [{ type: "vercel", sandboxId: "sbx-456" }, { env: undefined }],
+    ]);
+  });
+
+  test("getSandbox forwards injected secret env to the reconnect", async () => {
+    await getSandbox(
+      {
+        sandbox: {
+          state: { type: "vercel", sandboxId: "sbx-789" },
+          workingDirectory: "/repo",
+          env: { API_KEY: "secret" },
+        },
+        model: "test-model",
+      },
+      "bash",
+    );
+
+    expect(connectSandboxCalls).toEqual([
+      [
+        { type: "vercel", sandboxId: "sbx-789" },
+        { env: { API_KEY: "secret" } },
+      ],
     ]);
   });
 

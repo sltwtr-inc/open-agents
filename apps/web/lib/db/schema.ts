@@ -1,4 +1,5 @@
 import type { SandboxState } from "@open-agents/sandbox";
+import { sql } from "drizzle-orm";
 import type { ModelVariant } from "@/lib/model-variants";
 import type { GlobalSkillRef } from "@/lib/skills/global-skill-refs";
 import {
@@ -99,6 +100,113 @@ export const githubInstallations = pgTable(
       table.accountLogin,
     ),
   ],
+);
+
+// Single org-wide GitHub App installation (admin-managed). At most one row:
+// the SLTWTR org install that every team member's sessions clone through.
+export const orgGithubInstallation = pgTable("org_github_installation", {
+  id: text("id").primaryKey(),
+  installationId: integer("installation_id").notNull().unique(),
+  accountLogin: text("account_login").notNull(),
+  accountType: text("account_type", {
+    enum: ["User", "Organization"],
+  }).notNull(),
+  repositorySelection: text("repository_selection", {
+    enum: ["all", "selected"],
+  }).notNull(),
+  installationUrl: text("installation_url"),
+  configuredByUserId: text("configured_by_user_id").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Admin-curated allowlist of repositories team members may launch sessions on.
+export const orgAllowedRepos = pgTable(
+  "org_allowed_repos",
+  {
+    id: text("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    repositoryId: integer("repository_id").notNull(),
+    defaultBranch: text("default_branch"),
+    cloneUrl: text("clone_url").notNull(),
+    // Per-repo opt-in for injecting org/repo secrets into the sandbox VM.
+    secretsEnabled: boolean("secrets_enabled").notNull().default(false),
+    addedByUserId: text("added_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("org_allowed_repos_owner_repo_idx").on(
+      sql`lower(${table.owner})`,
+      sql`lower(${table.repo})`,
+    ),
+  ],
+);
+
+// Org-wide default secrets injected into opted-in sandboxes. Values are
+// encrypted at rest (AES-256-GCM); never store plaintext here.
+export const orgSecrets = pgTable(
+  "org_secrets",
+  {
+    id: text("id").primaryKey(),
+    key: text("key").notNull(),
+    valueCiphertext: text("value_ciphertext").notNull(),
+    description: text("description"),
+    createdByUserId: text("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("org_secrets_key_idx").on(table.key)],
+);
+
+// Per-repo secret overrides. Repo values take precedence over org values.
+export const repoSecrets = pgTable(
+  "repo_secrets",
+  {
+    id: text("id").primaryKey(),
+    allowedRepoId: text("allowed_repo_id")
+      .notNull()
+      .references(() => orgAllowedRepos.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    valueCiphertext: text("value_ciphertext").notNull(),
+    description: text("description"),
+    createdByUserId: text("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("repo_secrets_repo_key_idx").on(table.allowedRepoId, table.key),
+  ],
+);
+
+// Append-only audit trail for secret management and injection. Stores key
+// names and metadata only — never secret values or ciphertext.
+export const secretAuditLog = pgTable(
+  "secret_audit_log",
+  {
+    id: text("id").primaryKey(),
+    actorUserId: text("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    action: text("action", {
+      enum: ["create", "update", "delete", "inject"],
+    }).notNull(),
+    scope: text("scope", { enum: ["org", "repo"] }).notNull(),
+    secretKey: text("secret_key").notNull(),
+    allowedRepoId: text("allowed_repo_id"),
+    sessionId: text("session_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("secret_audit_log_created_at_idx").on(table.createdAt)],
 );
 
 export const vercelProjectLinks = pgTable(
@@ -333,6 +441,17 @@ export type WorkflowRunStep = typeof workflowRunSteps.$inferSelect;
 export type NewWorkflowRunStep = typeof workflowRunSteps.$inferInsert;
 export type GitHubInstallation = typeof githubInstallations.$inferSelect;
 export type NewGitHubInstallation = typeof githubInstallations.$inferInsert;
+export type OrgGithubInstallation = typeof orgGithubInstallation.$inferSelect;
+export type NewOrgGithubInstallation =
+  typeof orgGithubInstallation.$inferInsert;
+export type OrgAllowedRepo = typeof orgAllowedRepos.$inferSelect;
+export type NewOrgAllowedRepo = typeof orgAllowedRepos.$inferInsert;
+export type OrgSecret = typeof orgSecrets.$inferSelect;
+export type NewOrgSecret = typeof orgSecrets.$inferInsert;
+export type RepoSecret = typeof repoSecrets.$inferSelect;
+export type NewRepoSecret = typeof repoSecrets.$inferInsert;
+export type SecretAuditEntry = typeof secretAuditLog.$inferSelect;
+export type NewSecretAuditEntry = typeof secretAuditLog.$inferInsert;
 
 // User preferences for settings
 export const userPreferences = pgTable("user_preferences", {

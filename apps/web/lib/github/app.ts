@@ -188,3 +188,83 @@ export function getAppOctokit(): Octokit {
     },
   });
 }
+
+export interface InstallationDetails {
+  installationId: number;
+  accountLogin: string;
+  accountType: "User" | "Organization";
+  repositorySelection: "all" | "selected";
+  installationUrl: string | null;
+}
+
+/** Fetch installation metadata as the GitHub App (no repo scoping needed). */
+export async function getInstallationDetails(
+  installationId: number,
+): Promise<InstallationDetails | null> {
+  const octokit = getAppOctokit();
+  try {
+    const { data } = await octokit.rest.apps.getInstallation({
+      installation_id: installationId,
+    });
+
+    const account = data.account;
+    const login =
+      account && "login" in account ? account.login : (account?.name ?? null);
+    if (!login) {
+      return null;
+    }
+
+    const accountType =
+      account && "type" in account && account.type === "Organization"
+        ? "Organization"
+        : "User";
+
+    return {
+      installationId,
+      accountLogin: login,
+      accountType,
+      repositorySelection:
+        data.repository_selection === "all" ? "all" : "selected",
+      installationUrl: data.html_url ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mint an installation token scoped to ALL repositories the installation can
+ * access (no `repository_ids` restriction). Use only for app-level reads such
+ * as listing the repos an admin may allowlist — never hand this to a sandbox.
+ */
+export async function mintFullInstallationToken(
+  installationId: number,
+): Promise<string> {
+  const appJwt = await getAppJwt();
+  const response = await fetch(
+    `https://api.github.com/app/installations/${installationId}/access_tokens`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ permissions: { metadata: "read" } }),
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `Failed to mint installation token: ${response.status} ${body}`,
+    );
+  }
+
+  const payload: unknown = await response.json();
+  const parsed = installationTokenResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error("Invalid GitHub installation token response");
+  }
+  return parsed.data.token;
+}
