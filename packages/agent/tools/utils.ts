@@ -89,7 +89,7 @@ export async function getSandbox(
   }
 
   return connectSandbox(context.sandbox.state, {
-    ...(context.sandbox.env ? { env: context.sandbox.env } : {}),
+    env: context.sandbox.env,
   });
 }
 
