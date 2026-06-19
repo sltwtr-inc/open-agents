@@ -35,6 +35,7 @@ import {
   getSessionSandboxName,
   hasResumableSandboxState,
 } from "@/lib/sandbox/utils";
+import { resolveSandboxSecrets } from "@/lib/sandbox/sandbox-secrets";
 import { getServerSession } from "@/lib/session/get-server-session";
 import { checkRateLimit, rateLimitKey } from "@/lib/rate-limit";
 // import { buildDevelopmentDotenvFromVercelProject } from "@/lib/vercel/projects";
@@ -207,6 +208,13 @@ export async function POST(req: Request) {
         `${session.user.username}@users.noreply.github.com`,
     };
 
+    const sandboxEnv = await resolveSandboxSecrets({
+      owner: sessionRecord?.repoOwner,
+      repo: sessionRecord?.repoName,
+      sessionId,
+      actorUserId: session.user.id,
+    });
+
     sandbox = await connectSandbox({
       state: {
         type: "vercel",
@@ -216,6 +224,7 @@ export async function POST(req: Request) {
       options: {
         githubToken: setupToken?.token,
         gitUser,
+        ...(sandboxEnv ? { env: sandboxEnv } : {}),
         timeout: DEFAULT_SANDBOX_TIMEOUT_MS,
         vcpus: DEFAULT_SANDBOX_VCPUS,
         ports: DEFAULT_SANDBOX_PORTS,

@@ -267,6 +267,13 @@
       "when": 1781822815921,
       "tag": "0037_woozy_dracula",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1781823655812,
+      "tag": "0038_youthful_doctor_octopus",
+      "breakpoints": true
     }
   ]
 }

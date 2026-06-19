@@ -16,6 +16,7 @@ import {
   verifyRepoAccess,
   getRepoAccessErrorMessage,
 } from "@/lib/github/access";
+import { resolveSandboxSecrets } from "@/lib/sandbox/sandbox-secrets";
 import {
   mintInstallationToken,
   revokeInstallationToken,
@@ -231,6 +232,13 @@ export async function provisionSessionSandbox(params: {
     session,
   });
 
+  const sandboxEnv = await resolveSandboxSecrets({
+    owner: session.repoOwner,
+    repo: session.repoName,
+    sessionId: session.id,
+    actorUserId: session.userId,
+  });
+
   let sandbox: Sandbox;
   try {
     sandbox = await connectSandbox({
@@ -238,6 +246,7 @@ export async function provisionSessionSandbox(params: {
       options: {
         githubToken: setupToken?.token,
         gitUser,
+        ...(sandboxEnv ? { env: sandboxEnv } : {}),
         timeout: DEFAULT_SANDBOX_TIMEOUT_MS,
         vcpus: DEFAULT_SANDBOX_VCPUS,
         ports: DEFAULT_SANDBOX_PORTS,

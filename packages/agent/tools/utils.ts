@@ -88,7 +88,21 @@ export async function getSandbox(
     );
   }
 
-  return connectSandbox(context.sandbox.state);
+  return connectSandbox(context.sandbox.state, {
+    ...(context.sandbox.env ? { env: context.sandbox.env } : {}),
+  });
+}
+
+/**
+ * Secret values injected into the sandbox env for this session, used to redact
+ * them from tool output before it reaches the model/transcript.
+ */
+export function getSandboxEnvValues(experimental_context: unknown): string[] {
+  const context = isAgentContext(experimental_context)
+    ? experimental_context
+    : undefined;
+  const env = context?.sandbox?.env;
+  return env ? Object.values(env) : [];
 }
 
 /**

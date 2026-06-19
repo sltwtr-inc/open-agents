@@ -27,6 +27,7 @@ export async function GET() {
       repo: row.repo,
       full_name: `${row.owner}/${row.repo}`,
       defaultBranch: row.defaultBranch,
+      secretsEnabled: row.secretsEnabled,
     })),
   );
 }

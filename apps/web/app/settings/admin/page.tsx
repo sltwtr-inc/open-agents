@@ -20,6 +20,7 @@ import {
 } from "@/lib/admin/actions";
 import { AllowedReposSection } from "./allowed-repos-section";
 import { OrgGitHubSection } from "./org-github-section";
+import { SecretsSection } from "./secrets-section";
 
 function NotFoundState() {
   return (
@@ -81,6 +82,8 @@ function AdminPageContent() {
       <OrgGitHubSection />
 
       <AllowedReposSection />
+
+      <SecretsSection />
 
       <div className="rounded-lg border border-red-500/30 bg-red-500/5">
         <div className="border-b border-red-500/20 px-5 py-4">

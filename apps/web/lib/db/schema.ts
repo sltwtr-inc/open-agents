@@ -132,6 +132,8 @@ export const orgAllowedRepos = pgTable(
     repositoryId: integer("repository_id").notNull(),
     defaultBranch: text("default_branch"),
     cloneUrl: text("clone_url").notNull(),
+    // Per-repo opt-in for injecting org/repo secrets into the sandbox VM.
+    secretsEnabled: boolean("secrets_enabled").notNull().default(false),
     addedByUserId: text("added_by_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -144,6 +146,67 @@ export const orgAllowedRepos = pgTable(
       sql`lower(${table.repo})`,
     ),
   ],
+);
+
+// Org-wide default secrets injected into opted-in sandboxes. Values are
+// encrypted at rest (AES-256-GCM); never store plaintext here.
+export const orgSecrets = pgTable(
+  "org_secrets",
+  {
+    id: text("id").primaryKey(),
+    key: text("key").notNull(),
+    valueCiphertext: text("value_ciphertext").notNull(),
+    description: text("description"),
+    createdByUserId: text("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("org_secrets_key_idx").on(table.key)],
+);
+
+// Per-repo secret overrides. Repo values take precedence over org values.
+export const repoSecrets = pgTable(
+  "repo_secrets",
+  {
+    id: text("id").primaryKey(),
+    allowedRepoId: text("allowed_repo_id")
+      .notNull()
+      .references(() => orgAllowedRepos.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    valueCiphertext: text("value_ciphertext").notNull(),
+    description: text("description"),
+    createdByUserId: text("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("repo_secrets_repo_key_idx").on(table.allowedRepoId, table.key),
+  ],
+);
+
+// Append-only audit trail for secret management and injection. Stores key
+// names and metadata only — never secret values or ciphertext.
+export const secretAuditLog = pgTable(
+  "secret_audit_log",
+  {
+    id: text("id").primaryKey(),
+    actorUserId: text("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    action: text("action", {
+      enum: ["create", "update", "delete", "inject"],
+    }).notNull(),
+    scope: text("scope", { enum: ["org", "repo"] }).notNull(),
+    secretKey: text("secret_key").notNull(),
+    allowedRepoId: text("allowed_repo_id"),
+    sessionId: text("session_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("secret_audit_log_created_at_idx").on(table.createdAt)],
 );
 
 export const vercelProjectLinks = pgTable(
@@ -383,6 +446,12 @@ export type NewOrgGithubInstallation =
   typeof orgGithubInstallation.$inferInsert;
 export type OrgAllowedRepo = typeof orgAllowedRepos.$inferSelect;
 export type NewOrgAllowedRepo = typeof orgAllowedRepos.$inferInsert;
+export type OrgSecret = typeof orgSecrets.$inferSelect;
+export type NewOrgSecret = typeof orgSecrets.$inferInsert;
+export type RepoSecret = typeof repoSecrets.$inferSelect;
+export type NewRepoSecret = typeof repoSecrets.$inferInsert;
+export type SecretAuditEntry = typeof secretAuditLog.$inferSelect;
+export type NewSecretAuditEntry = typeof secretAuditLog.$inferInsert;
 
 // User preferences for settings
 export const userPreferences = pgTable("user_preferences", {

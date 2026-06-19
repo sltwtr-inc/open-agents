@@ -184,6 +184,18 @@ export async function addAllowedRepo(
   return created;
 }
 
+export async function setRepoSecretsEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<number> {
+  const updated = await db
+    .update(orgAllowedRepos)
+    .set({ secretsEnabled: enabled, updatedAt: new Date() })
+    .where(eq(orgAllowedRepos.id, id))
+    .returning({ id: orgAllowedRepos.id });
+  return updated.length;
+}
+
 export async function removeAllowedRepo(id: string): Promise<number> {
   const deleted = await db
     .delete(orgAllowedRepos)

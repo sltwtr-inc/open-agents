@@ -1,7 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import * as path from "path";
-import { getSandbox } from "./utils";
+import { redactSecrets } from "./redact";
+import { getSandbox, getSandboxEnvValues } from "./utils";
 
 const TIMEOUT_MS = 120_000;
 
@@ -120,6 +121,7 @@ EXAMPLES:
     ) => {
       const sandbox = await getSandbox(experimental_context, "bash");
       const workingDirectory = sandbox.workingDirectory;
+      const secretValues = getSandboxEnvValues(experimental_context);
 
       // Resolve the working directory
       const workingDir = cwd
@@ -165,8 +167,8 @@ EXAMPLES:
       return {
         success: result.success,
         exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
+        stdout: redactSecrets(result.stdout, secretValues),
+        stderr: redactSecrets(result.stderr, secretValues),
         ...(result.truncated && { truncated: true }),
       };
     },
